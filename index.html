@@ -45,6 +45,7 @@ button:disabled{opacity:.4}
 .row{display:flex;justify-content:space-between;gap:10px;padding:7px 0;border-top:1px solid var(--line);font-variant-numeric:tabular-nums}
 .row:first-child{border-top:0}
 .late{color:var(--over)}
+.spk{padding:6px 10px;font-size:20px;line-height:1;border-radius:999px;background:var(--track);flex:none}
 .pic{display:inline-block;margin-top:6px;font-size:14px;color:var(--go);text-decoration:none;padding:6px 10px;border:1px solid var(--line);border-radius:999px}
 .empty{margin:auto;text-align:center;color:var(--muted);padding:40px 10px}
 .hidden{display:none}
@@ -81,10 +82,25 @@ button:disabled{opacity:.4}
     get() { try { return JSON.parse(localStorage.getItem(KEY) || "null"); } catch (e) { return null; } },
     set(v) { try { localStorage.setItem(KEY, JSON.stringify(v)); } catch (e) {} },
   };
+  // A saved session is offered for resume only if it was active this recently; older ones are dropped.
+  const RESUME_WINDOW_MS = 3 * 3600 * 1000;
 
-  // ---- State
-  let st = store.get() || { i: 0, phase: "ready", phaseStart: 0, sessionStart: 0, paused: 0, pauseAt: 0, log: [] };
-  // phase: ready | work | rest | done
+  // Speaker on/off, remembered across sessions.
+  let soundOn = true;
+  try { soundOn = localStorage.getItem("wt:sound") !== "off"; } catch (e) {}
+  const spkBtn = () => `<button class="spk" id="spk" aria-label="Sound ${soundOn ? "on" : "off"}">${soundOn ? "🔊" : "🔇"}</button>`;
+  document.addEventListener("click", e => {
+    const b = e.target.closest && e.target.closest("#spk");
+    if (!b) return;
+    soundOn = !soundOn;
+    try { localStorage.setItem("wt:sound", soundOn ? "on" : "off"); } catch (x) {}
+    document.querySelectorAll("#spk").forEach(x => { x.textContent = soundOn ? "🔊" : "🔇"; x.setAttribute("aria-label", "Sound " + (soundOn ? "on" : "off")); });
+    if (soundOn) { unlockAudio(); beep(988, 150, 1); }
+  });
+
+  // ---- State (initialized after the helpers below)
+  let st = null;      // phase: ready | work | rest | done
+  let resumable = null;
 
   // ---- Sound, vibration, wake lock (all best effort)
   let ctx = null;
@@ -101,6 +117,7 @@ button:disabled{opacity:.4}
   }
   document.addEventListener("pointerdown", unlockAudio, { passive: true });
   function beep(freq = 880, ms = 200, n = 1) {
+    if (!soundOn) return;
     try {
       ctx = ctx || new (window.AudioContext || window.webkitAudioContext)();
       if (ctx.state !== "running") ctx.resume();
@@ -124,7 +141,16 @@ button:disabled{opacity:.4}
   const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const elapsed = () => st.sessionStart ? ((st.pauseAt || now()) - st.sessionStart - st.paused) / 1000 : 0;
   const inPhase = () => ((st.pauseAt || now()) - st.phaseStart) / 1000;
-  const save = () => store.set(st);
+  const save = () => { st.updated = now(); store.set(st); };
+  const fresh = () => ({ i: 0, phase: "ready", phaseStart: 0, sessionStart: 0, paused: 0, pauseAt: 0, log: [] });
+
+  st = fresh();
+  {
+    const saved = store.get();
+    if (saved && (saved.phase === "work" || saved.phase === "rest") && now() - (saved.updated || 0) < RESUME_WINDOW_MS) {
+      resumable = saved;
+    }
+  }
   // "Chin-ups, set 2 of 3" -> "Chin-ups". Mirrors move_name() in fitplan/render.py.
   const moveName = n => String(n || "").replace(/,?\s*\b(set|round)\s+\d+(\s+of\s+\d+)?\b.*$|\s*\((test|prep)\)|\s+(left|right)\b/gi, "").replace(/^[\s,]+|[\s,]+$/g, "");
   const picturesUrl = n => "https://www.google.com/search?tbm=isch&q=" + encodeURIComponent(moveName(n) + " exercise form");
@@ -148,8 +174,16 @@ button:disabled{opacity:.4}
   // ---- Actions
   function start() {
     unlockAudio(); wake();
-    st = { i: 0, phase: "ready", phaseStart: 0, sessionStart: now(), paused: 0, pauseAt: 0, log: [] };
+    resumable = null;
+    st = fresh(); st.sessionStart = now();
     begin("work"); beep(988, 160, 2); render();
+  }
+  function resume() {
+    unlockAudio(); wake();
+    st = resumable; resumable = null;
+    // Freeze the clocks at the last moment it was in use, then unpause: time away is not counted.
+    if (!st.pauseAt) st.pauseAt = st.updated || now();
+    togglePause();
   }
   function primary() {
     if (st.pauseAt) return togglePause();
@@ -171,8 +205,10 @@ button:disabled{opacity:.4}
   }
 
   // ---- Tick: auto-advance timed work and rests, countdown cues
+  let lastSave = 0;
   setInterval(() => {
     if (st.pauseAt || st.phase === "ready" || st.phase === "done") return;
+    if (now() - lastSave > 5000) { lastSave = now(); save(); }
     const s = steps[st.i], t = inPhase();
     const target = st.phase === "work" ? s.seconds : s.rest;
     const auto = st.phase === "rest" || s.timed;
@@ -187,19 +223,21 @@ button:disabled{opacity:.4}
     if (st.phase === "ready") {
       const mins = Math.round(plannedTotal / 60);
       app.innerHTML = `
-        <header><div><div class="title">${esc(plan.t || "Workout")}</div><div class="sub">${esc(plan.d || "")} · ${steps.length} steps · about ${mins} min</div></div></header>
-        <button class="primary" id="go">Start</button>
+        <header><div><div class="title">${esc(plan.t || "Workout")}</div><div class="sub">${esc(plan.d || "")} · ${steps.length} steps · about ${mins} min</div></div>${spkBtn()}</header>
+        ${resumable ? `<button class="primary" id="res">Resume at step ${resumable.i + 1} of ${steps.length}</button><button id="go">Start over</button>`
+                    : `<button class="primary" id="go">Start</button>`}
         <button id="snd">Test sound</button>
         <div class="sub" style="text-align:center">Timed pieces and rests advance on their own. On rep sets, tap Done when the set ends.</div>
         <div class="list">${steps.map((s, k) => `<div class="row"><span>${esc(s.block ? s.block + ": " : "")}${esc(s.name)} <span class="sub">${esc(s.detail)}</span></span><span class="sub">${s.timed ? fmt(s.seconds) : "reps"}${s.rest ? " / " + fmt(s.rest) : ""}</span></div>`).join("")}</div>`;
       document.getElementById("go").onclick = start;
+      if (resumable) document.getElementById("res").onclick = resume;
       document.getElementById("snd").onclick = () => { unlockAudio(); beep(988, 200, 2); };
       return;
     }
     if (st.phase === "done") return renderDone();
     app.innerHTML = `
       <header><div><div class="title">${esc(plan.t || "Workout")}</div><div class="sub" id="pos"></div></div>
-        <div class="clock"><b id="el">0:00</b><div class="sub" id="pace"></div></div></header>
+        <div style="display:flex;gap:10px;align-items:flex-start"><div class="clock"><b id="el">0:00</b><div class="sub" id="pace"></div></div>${spkBtn()}</div></header>
       <div class="bar"><i id="prog"></i></div>
       <section class="stage">
         <div class="phase" id="phase"></div>
@@ -291,7 +329,7 @@ button:disabled{opacity:.4}
       <button id="again">Start over</button>
       <div class="sub" style="text-align:center">Say it in a "Fitness:" voice note to feed tomorrow's plan.</div>`;
     document.getElementById("cp").onclick = async e => { try { await navigator.clipboard.writeText(summary); e.target.textContent = "Copied"; } catch (x) { e.target.textContent = summary; } };
-    document.getElementById("again").onclick = () => { st = { i: 0, phase: "ready", log: [] }; save(); render(); };
+    document.getElementById("again").onclick = () => { st = fresh(); save(); render(); };
   }
 
   render();
