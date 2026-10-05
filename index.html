@@ -88,13 +88,26 @@ button:disabled{opacity:.4}
 
   // ---- Sound, vibration, wake lock (all best effort)
   let ctx = null;
-  function beep(freq = 880, ms = 140, n = 1) {
+  // iOS: audio only starts from a tap, and the context can come up suspended. Every tap calls
+  // this. The "playback" audio session (Safari 17+) lets the beeps play with the mute switch on.
+  function unlockAudio() {
+    try { if (navigator.audioSession) navigator.audioSession.type = "playback"; } catch (e) {}
     try {
       ctx = ctx || new (window.AudioContext || window.webkitAudioContext)();
+      if (ctx.state !== "running") ctx.resume();
+      const b = ctx.createBuffer(1, 1, 22050), src = ctx.createBufferSource();
+      src.buffer = b; src.connect(ctx.destination); src.start(0);
+    } catch (e) {}
+  }
+  document.addEventListener("pointerdown", unlockAudio, { passive: true });
+  function beep(freq = 880, ms = 200, n = 1) {
+    try {
+      ctx = ctx || new (window.AudioContext || window.webkitAudioContext)();
+      if (ctx.state !== "running") ctx.resume();
       for (let k = 0; k < n; k++) {
-        const o = ctx.createOscillator(), g = ctx.createGain(), t = ctx.currentTime + k * (ms / 1000 + 0.08);
-        o.frequency.value = freq; o.connect(g); g.connect(ctx.destination);
-        g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.4, t + 0.01);
+        const o = ctx.createOscillator(), g = ctx.createGain(), t = ctx.currentTime + 0.02 + k * (ms / 1000 + 0.08);
+        o.type = "square"; o.frequency.value = freq; o.connect(g); g.connect(ctx.destination);
+        g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.6, t + 0.01);
         g.gain.exponentialRampToValueAtTime(0.0001, t + ms / 1000);
         o.start(t); o.stop(t + ms / 1000 + 0.02);
       }
@@ -134,7 +147,7 @@ button:disabled{opacity:.4}
 
   // ---- Actions
   function start() {
-    beep(988, 1, 1); wake();
+    unlockAudio(); wake();
     st = { i: 0, phase: "ready", phaseStart: 0, sessionStart: now(), paused: 0, pauseAt: 0, log: [] };
     begin("work"); beep(988, 160, 2); render();
   }
@@ -176,9 +189,11 @@ button:disabled{opacity:.4}
       app.innerHTML = `
         <header><div><div class="title">${esc(plan.t || "Workout")}</div><div class="sub">${esc(plan.d || "")} · ${steps.length} steps · about ${mins} min</div></div></header>
         <button class="primary" id="go">Start</button>
+        <button id="snd">Test sound</button>
         <div class="sub" style="text-align:center">Timed pieces and rests advance on their own. On rep sets, tap Done when the set ends.</div>
         <div class="list">${steps.map((s, k) => `<div class="row"><span>${esc(s.block ? s.block + ": " : "")}${esc(s.name)} <span class="sub">${esc(s.detail)}</span></span><span class="sub">${s.timed ? fmt(s.seconds) : "reps"}${s.rest ? " / " + fmt(s.rest) : ""}</span></div>`).join("")}</div>`;
       document.getElementById("go").onclick = start;
+      document.getElementById("snd").onclick = () => { unlockAudio(); beep(988, 200, 2); };
       return;
     }
     if (st.phase === "done") return renderDone();
