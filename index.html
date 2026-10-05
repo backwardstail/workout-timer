@@ -45,6 +45,7 @@ button:disabled{opacity:.4}
 .row{display:flex;justify-content:space-between;gap:10px;padding:7px 0;border-top:1px solid var(--line);font-variant-numeric:tabular-nums}
 .row:first-child{border-top:0}
 .late{color:var(--over)}
+.pic{display:inline-block;margin-top:6px;font-size:14px;color:var(--go);text-decoration:none;padding:6px 10px;border:1px solid var(--line);border-radius:999px}
 .empty{margin:auto;text-align:center;color:var(--muted);padding:40px 10px}
 .hidden{display:none}
 </style>
@@ -111,6 +112,9 @@ button:disabled{opacity:.4}
   const elapsed = () => st.sessionStart ? ((st.pauseAt || now()) - st.sessionStart - st.paused) / 1000 : 0;
   const inPhase = () => ((st.pauseAt || now()) - st.phaseStart) / 1000;
   const save = () => store.set(st);
+  // "Chin-ups, set 2 of 3" -> "Chin-ups". Mirrors move_name() in fitplan/render.py.
+  const moveName = n => String(n || "").replace(/,?\s*\b(set|round)\s+\d+(\s+of\s+\d+)?\b.*$|\s*\((test|prep)\)/i, "").replace(/^[\s,]+|[\s,]+$/g, "");
+  const picturesUrl = n => "https://www.google.com/search?tbm=isch&q=" + encodeURIComponent(moveName(n) + " exercise form");
 
   function begin(phase) { st.phase = phase; st.phaseStart = now(); st.cued = 0; save(); }
   function record(kind, secs) {
@@ -187,6 +191,7 @@ button:disabled{opacity:.4}
         <div class="block" id="blk"></div>
         <div class="name" id="nm"></div>
         <div class="detail" id="dt"></div>
+        <div><a class="pic" id="pic" target="_blank" rel="noopener">Pictures of this move</a></div>
         <div class="big" id="big">0:00</div>
         <div class="hint" id="hint"></div>
       </section>
@@ -230,6 +235,9 @@ button:disabled{opacity:.4}
     el("blk").textContent = s.block || "";
     el("nm").textContent = isRest ? "Rest" : s.name;
     el("dt").textContent = isRest ? ("Up next: " + nextName()) : s.detail;
+    const pic = el("pic"), picFor = isRest ? steps[st.i + 1] : s;
+    if (picFor) { pic.href = picturesUrl(picFor.name); pic.textContent = isRest ? "Pictures of the next move" : "Pictures of this move"; pic.className = "pic"; }
+    else pic.className = "pic hidden";
 
     const big = el("big");
     if (counting) { big.textContent = fmt(target - t); big.className = "big"; }
