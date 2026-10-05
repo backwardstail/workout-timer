@@ -84,8 +84,15 @@ button:disabled{opacity:.4}
   }
   const plan = decode(location.hash);
   if (!plan) return;
-  const steps = plan.s.map(([block, name, detail, kind, seconds, rest]) =>
-    ({ block, name, detail, timed: kind === 1, seconds: Math.max(0, seconds | 0), rest: Math.max(0, rest | 0) }));
+  // Hands-free: every step runs on its clock, rep sets on their estimated time. Every change of
+  // exercise gets at least MIN_TRANSITION seconds, even inside a superset; a rep set with no
+  // estimate gets DEFAULT_SET_SECONDS. Nothing after the last step.
+  const MIN_TRANSITION = 10, DEFAULT_SET_SECONDS = 40;
+  const steps = plan.s.map(([block, name, detail, kind, seconds, rest], k, all) => ({
+    block, name, detail, timed: kind === 1,
+    seconds: Math.max(0, seconds | 0) || (kind === 1 ? 0 : DEFAULT_SET_SECONDS),
+    rest: k === all.length - 1 ? 0 : Math.max(MIN_TRANSITION, rest | 0),
+  }));
   const plannedTotal = steps.reduce((a, s) => a + s.seconds + s.rest, 0);
 
   // ---- Persistence: resume after an accidental reload. Per-viewer convenience only.
@@ -268,7 +275,7 @@ button:disabled{opacity:.4}
         <button id="fx" style="padding:9px 14px;border-radius:999px;font-size:14px">Close</button></header>
       <div class="list">${steps.map((s, k) => `<div class="step ${k < st.i ? "past" : k === st.i ? "cur" : ""}" data-k="${k}">
         <span><span class="blk">${esc(s.block)}</span>${esc(s.name)} <span class="sub">${esc(s.detail)}</span></span>
-        <span class="sub">${s.timed ? fmt(s.seconds) : "reps"}${s.rest ? " / " + fmt(s.rest) : ""}</span></div>`).join("")}</div>
+        <span class="sub">${fmt(s.seconds)}${s.timed ? "" : " est"}${s.rest ? " / " + fmt(s.rest) : ""}</span></div>`).join("")}</div>
     </div>`;
     document.body.appendChild(el);
     el.querySelector("#fx").onclick = closeFull;
@@ -284,7 +291,7 @@ button:disabled{opacity:.4}
     if (now() - lastSave > 5000) { lastSave = now(); save(); }
     const s = steps[st.i], t = inPhase();
     const target = st.phase === "work" ? s.seconds : s.rest;
-    const auto = st.phase === "rest" || s.timed;
+    const auto = true;
     const left = target - t;
     if (auto && target > 0 && left <= COUNTDOWN + 0.05 && left > 0 && st.cued !== Math.ceil(left)) { st.cued = Math.ceil(left); sound("pip"); }
     if (auto && target > 0 && left <= 0) { st.phase === "work" ? finishWork() : finishRest(); }
@@ -300,8 +307,8 @@ button:disabled{opacity:.4}
         ${resumable ? `<button class="primary" id="res">Resume at step ${resumable.i + 1} of ${steps.length}</button><button id="go">Start over</button>`
                     : `<button class="primary" id="go">Start</button>`}
         <button id="snd">Test sound</button>
-        <div class="sub" style="text-align:center">Timed pieces and rests advance on their own. On rep sets, tap Done when the set ends.</div>
-        <div class="list">${steps.map((s, k) => `<div class="row"><span>${esc(s.block ? s.block + ": " : "")}${esc(s.name)} <span class="sub">${esc(s.detail)}</span></span><span class="sub">${s.timed ? fmt(s.seconds) : "reps"}${s.rest ? " / " + fmt(s.rest) : ""}</span></div>`).join("")}</div>`;
+        <div class="sub" style="text-align:center">Runs hands-free: rep sets count down an estimate, then a transition, then the next set. Tap Next to move on early or +15s for more time.</div>
+        <div class="list">${steps.map((s, k) => `<div class="row"><span>${esc(s.block ? s.block + ": " : "")}${esc(s.name)} <span class="sub">${esc(s.detail)}</span></span><span class="sub">${fmt(s.seconds)}${s.timed ? "" : " est"}${s.rest ? " / " + fmt(s.rest) : ""}</span></div>`).join("")}</div>`;
       document.getElementById("go").onclick = start;
       if (resumable) document.getElementById("res").onclick = resume;
       document.getElementById("snd").onclick = () => { unlockAudio(); sound("pip"); setTimeout(() => sound("pip"), 1000); setTimeout(() => sound("go"), 2000); };
@@ -323,9 +330,10 @@ button:disabled{opacity:.4}
       </section>
       <div class="next" id="nx"></div>
       <div class="controls">
-        <button id="bk">Back</button><button class="primary" id="pr">Done</button><button id="ps">Pause</button>
+        <button id="bk">Back</button><button class="primary" id="pr">Next</button><button id="ps">Pause</button>
       </div>
-      <div class="tools"><button id="rs">Reset</button><button id="fw">Full workout</button></div>`;
+      <div class="tools"><button id="rs">Reset</button><button id="ex">+15s</button><button id="fw">Full workout</button></div>`;
+    document.getElementById("ex").onclick = () => { if (!st.pauseAt) { st.phaseStart += 15000; st.cued = 0; save(); paint(); } };
     document.getElementById("pr").onclick = primary;
     document.getElementById("fw").onclick = showFull;
     const rs = document.getElementById("rs");
@@ -354,8 +362,7 @@ button:disabled{opacity:.4}
     const s = steps[st.i], t = inPhase();
     const isRest = st.phase === "rest";
     const target = isRest ? s.rest : s.seconds;
-    const counting = isRest || s.timed;
-    const over = !counting && target > 0 && t > target * 1.5;
+    const counting = true, over = false;
 
     el("pos").textContent = `Step ${st.i + 1} of ${steps.length}`;
     el("el").textContent = fmt(elapsed());
@@ -365,7 +372,8 @@ button:disabled{opacity:.4}
     el("prog").style.width = Math.min(100, 100 * (st.i + (isRest ? 0.75 : 0.25)) / steps.length) + "%";
 
     const ph = el("phase");
-    ph.textContent = st.pauseAt ? "Paused" : (isRest ? "Rest" : (s.timed ? "Go" : "Work"));
+    const label = isRest ? (s.rest <= 20 ? "Transition" : "Rest") : (s.timed ? "Go" : "Work");
+    ph.textContent = st.pauseAt ? "Paused" : label;
     ph.className = "phase " + (st.pauseAt ? "" : isRest ? "rest" : over ? "over" : "work");
     el("blk").textContent = s.block || "";
     el("nm").textContent = isRest ? "Rest" : s.name;
@@ -386,11 +394,11 @@ button:disabled{opacity:.4}
     }
     else { big.textContent = fmt(t); big.className = "big" + (over ? " over" : ""); }
     el("hint").textContent = st.pauseAt ? "Tap Resume to continue" :
-      (isRest ? "Rest ends on its own. Tap Skip to go now." :
-      (s.timed ? "Advances on its own." : (target ? `Tap Done when the set ends (about ${fmt(target)})` : "Tap Done when the set ends")));
+      (isRest ? (s.rest <= 20 ? "Get set for the next move." : "Rest ends on its own.") :
+      (s.timed ? "Advances on its own." : "Estimated time for the set. Next moves on early, +15s adds time."));
 
     const pr = el("pr");
-    pr.textContent = st.pauseAt ? "Resume" : (isRest ? "Skip rest" : (s.timed ? "Skip" : "Done"));
+    pr.textContent = st.pauseAt ? "Resume" : (isRest ? "Skip" : "Next");
     el("ps").textContent = st.pauseAt ? "Resume" : "Pause";
     const n = steps[st.i + 1];
     el("nx").innerHTML = isRest || !n ? (n ? `<span>After that:</span> ${esc(steps[st.i + 2] ? steps[st.i + 2].name : "finish")}` : "<span>Last step</span>")
