@@ -171,9 +171,9 @@ button:disabled{opacity:.4}
       const mins = Math.round(plannedTotal / 60);
       app.innerHTML = `
         <header><div><div class="title">${esc(plan.t || "Workout")}</div><div class="sub">${esc(plan.d || "")} · ${steps.length} steps · about ${mins} min</div></div></header>
-        <div class="list">${steps.map((s, k) => `<div class="row"><span>${esc(s.block ? s.block + ": " : "")}${esc(s.name)} <span class="sub">${esc(s.detail)}</span></span><span class="sub">${s.timed ? fmt(s.seconds) : "reps"}${s.rest ? " / " + fmt(s.rest) : ""}</span></div>`).join("")}</div>
         <button class="primary" id="go">Start</button>
-        <div class="sub" style="text-align:center">Timed pieces and rests advance on their own. On rep sets, tap Done when the set ends.</div>`;
+        <div class="sub" style="text-align:center">Timed pieces and rests advance on their own. On rep sets, tap Done when the set ends.</div>
+        <div class="list">${steps.map((s, k) => `<div class="row"><span>${esc(s.block ? s.block + ": " : "")}${esc(s.name)} <span class="sub">${esc(s.detail)}</span></span><span class="sub">${s.timed ? fmt(s.seconds) : "reps"}${s.rest ? " / " + fmt(s.rest) : ""}</span></div>`).join("")}</div>`;
       document.getElementById("go").onclick = start;
       return;
     }
