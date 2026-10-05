@@ -113,7 +113,7 @@ button:disabled{opacity:.4}
   const inPhase = () => ((st.pauseAt || now()) - st.phaseStart) / 1000;
   const save = () => store.set(st);
   // "Chin-ups, set 2 of 3" -> "Chin-ups". Mirrors move_name() in fitplan/render.py.
-  const moveName = n => String(n || "").replace(/,?\s*\b(set|round)\s+\d+(\s+of\s+\d+)?\b.*$|\s*\((test|prep)\)/i, "").replace(/^[\s,]+|[\s,]+$/g, "");
+  const moveName = n => String(n || "").replace(/,?\s*\b(set|round)\s+\d+(\s+of\s+\d+)?\b.*$|\s*\((test|prep)\)|\s+(left|right)\b/gi, "").replace(/^[\s,]+|[\s,]+$/g, "");
   const picturesUrl = n => "https://www.google.com/search?tbm=isch&q=" + encodeURIComponent(moveName(n) + " exercise form");
 
   function begin(phase) { st.phase = phase; st.phaseStart = now(); st.cued = 0; save(); }
