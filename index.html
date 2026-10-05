@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0f1412">
+<meta name="robots" content="noindex">
+<title>Workout Timer</title>
+<style>
+:root{
+  --bg:#f4f5f3;--card:#ffffff;--ink:#16201b;--muted:#66706a;--line:#dfe3df;
+  --go:#0b6e4f;--rest:#2f5d9e;--over:#b3261e;--track:#e8ebe8;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0f1412;--card:#18201c;--ink:#eef2ef;--muted:#9aa59f;--line:#2a332e;
+  --go:#3fbf8a;--rest:#7aa7e6;--over:#ff6b5e;--track:#242d28;
+}}
+:root[data-theme="dark"]{--bg:#0f1412;--card:#18201c;--ink:#eef2ef;--muted:#9aa59f;--line:#2a332e;--go:#3fbf8a;--rest:#7aa7e6;--over:#ff6b5e;--track:#242d28}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-tap-highlight-color:transparent}
+main{max-width:520px;margin:0 auto;padding:max(14px,env(safe-area-inset-top)) 16px max(20px,env(safe-area-inset-bottom));min-height:100dvh;display:flex;flex-direction:column;gap:12px}
+header{display:flex;justify-content:space-between;align-items:baseline;gap:12px}
+.title{font-weight:700;font-size:17px}
+.sub{color:var(--muted);font-size:13px}
+.clock{font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+.clock b{font-size:20px}
+.bar{height:6px;background:var(--track);border-radius:3px;overflow:hidden}
+.bar i{display:block;height:100%;width:0;background:var(--go);transition:width .3s}
+.stage{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:18px 16px;flex:1;display:flex;flex-direction:column;justify-content:center;text-align:center;gap:6px}
+.phase{font-size:13px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
+.phase.work{color:var(--go)}.phase.rest{color:var(--rest)}.phase.over{color:var(--over)}
+.block{color:var(--muted);font-size:14px}
+.name{font-size:26px;font-weight:700;line-height:1.2}
+.detail{font-size:18px;color:var(--muted)}
+.big{font-size:min(30vw,128px);font-weight:700;font-variant-numeric:tabular-nums;line-height:1;margin:10px 0 4px}
+.big.over{color:var(--over)}
+.hint{color:var(--muted);font-size:14px;min-height:20px}
+.next{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 14px;font-size:14px}
+.next span{color:var(--muted)}
+.controls{display:grid;grid-template-columns:1fr 2fr 1fr;gap:10px}
+button{font:inherit;border:0;border-radius:14px;padding:18px 10px;font-weight:700;cursor:pointer;background:var(--track);color:var(--ink)}
+button.primary{background:var(--go);color:#fff;font-size:20px}
+button:disabled{opacity:.4}
+.list{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:6px 14px;font-size:14px}
+.row{display:flex;justify-content:space-between;gap:10px;padding:7px 0;border-top:1px solid var(--line);font-variant-numeric:tabular-nums}
+.row:first-child{border-top:0}
+.late{color:var(--over)}
+.empty{margin:auto;text-align:center;color:var(--muted);padding:40px 10px}
+.hidden{display:none}
+</style>
+</head>
+<body>
+<main id="app"><div class="empty">Open this page from the Start timer link in the day's workout email.</div></main>
+<script>
+(() => {
+  "use strict";
+  const app = document.getElementById("app");
+
+  // ---- Payload: everything about the session travels in the URL fragment (never sent to a server).
+  // {v, d: date, t: title, m: planned minutes, s: [[block, name, detail, kind(0 reps | 1 timed), seconds, rest], ...]}
+  function decode(hash) {
+    try {
+      let b = hash.replace(/^#/, "").replace(/-/g, "+").replace(/_/g, "/");
+      while (b.length % 4) b += "=";
+      const bytes = Uint8Array.from(atob(b), c => c.charCodeAt(0));
+      const p = JSON.parse(new TextDecoder().decode(bytes));
+      if (!p || !Array.isArray(p.s) || !p.s.length) return null;
+      return p;
+    } catch (e) { return null; }
+  }
+  const plan = decode(location.hash);
+  if (!plan) return;
+  const steps = plan.s.map(([block, name, detail, kind, seconds, rest]) =>
+    ({ block, name, detail, timed: kind === 1, seconds: Math.max(0, seconds | 0), rest: Math.max(0, rest | 0) }));
+  const plannedTotal = steps.reduce((a, s) => a + s.seconds + s.rest, 0);
+
+  // ---- Persistence: resume after an accidental reload. Per-viewer convenience only.
+  const KEY = "wt:" + (plan.d || "") + ":" + (plan.t || "");
+  const store = {
+    get() { try { return JSON.parse(localStorage.getItem(KEY) || "null"); } catch (e) { return null; } },
+    set(v) { try { localStorage.setItem(KEY, JSON.stringify(v)); } catch (e) {} },
+  };
+
+  // ---- State
+  let st = store.get() || { i: 0, phase: "ready", phaseStart: 0, sessionStart: 0, paused: 0, pauseAt: 0, log: [] };
+  // phase: ready | work | rest | done
+
+  // ---- Sound, vibration, wake lock (all best effort)
+  let ctx = null;
+  function beep(freq = 880, ms = 140, n = 1) {
+    try {
+      ctx = ctx || new (window.AudioContext || window.webkitAudioContext)();
+      for (let k = 0; k < n; k++) {
+        const o = ctx.createOscillator(), g = ctx.createGain(), t = ctx.currentTime + k * (ms / 1000 + 0.08);
+        o.frequency.value = freq; o.connect(g); g.connect(ctx.destination);
+        g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.4, t + 0.01);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + ms / 1000);
+        o.start(t); o.stop(t + ms / 1000 + 0.02);
+      }
+    } catch (e) {}
+    try { navigator.vibrate && navigator.vibrate(n > 1 ? [120, 80, 120] : 120); } catch (e) {}
+  }
+  let lock = null;
+  async function wake() { try { lock = await navigator.wakeLock.request("screen"); } catch (e) {} }
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && st.phase !== "done") wake(); });
+
+  // ---- Helpers
+  const now = () => Date.now();
+  const fmt = s => { s = Math.max(0, Math.round(s)); const m = Math.floor(s / 60); return m + ":" + String(s % 60).padStart(2, "0"); };
+  const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const elapsed = () => st.sessionStart ? ((st.pauseAt || now()) - st.sessionStart - st.paused) / 1000 : 0;
+  const inPhase = () => ((st.pauseAt || now()) - st.phaseStart) / 1000;
+  const save = () => store.set(st);
+
+  function begin(phase) { st.phase = phase; st.phaseStart = now(); st.cued = 0; save(); }
+  function record(kind, secs) {
+    const s = steps[st.i];
+    st.log.push({ i: st.i, kind, secs: Math.round(secs), planned: kind === "work" ? s.seconds : s.rest });
+  }
+  function advance() {
+    if (st.i + 1 >= steps.length) { st.phase = "done"; save(); beep(660, 220, 3); try { lock && lock.release(); } catch (e) {} return; }
+    st.i++; begin("work"); beep(988, 160, 2);
+  }
+  function finishWork() {
+    record("work", inPhase());
+    const s = steps[st.i];
+    if (s.rest > 0) { begin("rest"); beep(523, 160); } else { advance(); }
+  }
+  function finishRest() { record("rest", inPhase()); advance(); }
+
+  // ---- Actions
+  function start() {
+    beep(988, 1, 1); wake();
+    st = { i: 0, phase: "ready", phaseStart: 0, sessionStart: now(), paused: 0, pauseAt: 0, log: [] };
+    begin("work"); beep(988, 160, 2); render();
+  }
+  function primary() {
+    if (st.pauseAt) return togglePause();
+    if (st.phase === "work") finishWork();
+    else if (st.phase === "rest") finishRest();
+    render();
+  }
+  function togglePause() {
+    if (st.phase === "ready" || st.phase === "done") return;
+    if (st.pauseAt) { const d = now() - st.pauseAt; st.paused += d; st.phaseStart += d; st.pauseAt = 0; wake(); }
+    else st.pauseAt = now();
+    save(); render();
+  }
+  function back() {
+    if (st.phase === "ready") return;
+    if (st.phase === "rest" || st.i === 0) { begin("work"); }
+    else { st.i--; begin("work"); }
+    st.pauseAt = 0; render();
+  }
+
+  // ---- Tick: auto-advance timed work and rests, countdown cues
+  setInterval(() => {
+    if (st.pauseAt || st.phase === "ready" || st.phase === "done") return;
+    const s = steps[st.i], t = inPhase();
+    const target = st.phase === "work" ? s.seconds : s.rest;
+    const auto = st.phase === "rest" || s.timed;
+    const left = target - t;
+    if (auto && target > 0 && left <= 3.05 && left > 0 && st.cued !== Math.ceil(left)) { st.cued = Math.ceil(left); beep(660, 90); }
+    if (auto && target > 0 && left <= 0) { st.phase === "work" ? finishWork() : finishRest(); }
+    paint();
+  }, 200);
+
+  // ---- Render
+  function render() {
+    if (st.phase === "ready") {
+      const mins = Math.round(plannedTotal / 60);
+      app.innerHTML = `
+        <header><div><div class="title">${esc(plan.t || "Workout")}</div><div class="sub">${esc(plan.d || "")} · ${steps.length} steps · about ${mins} min</div></div></header>
+        <div class="list">${steps.map((s, k) => `<div class="row"><span>${esc(s.block ? s.block + ": " : "")}${esc(s.name)} <span class="sub">${esc(s.detail)}</span></span><span class="sub">${s.timed ? fmt(s.seconds) : "reps"}${s.rest ? " / " + fmt(s.rest) : ""}</span></div>`).join("")}</div>
+        <button class="primary" id="go">Start</button>
+        <div class="sub" style="text-align:center">Timed pieces and rests advance on their own. On rep sets, tap Done when the set ends.</div>`;
+      document.getElementById("go").onclick = start;
+      return;
+    }
+    if (st.phase === "done") return renderDone();
+    app.innerHTML = `
+      <header><div><div class="title">${esc(plan.t || "Workout")}</div><div class="sub" id="pos"></div></div>
+        <div class="clock"><b id="el">0:00</b><div class="sub" id="pace"></div></div></header>
+      <div class="bar"><i id="prog"></i></div>
+      <section class="stage">
+        <div class="phase" id="phase"></div>
+        <div class="block" id="blk"></div>
+        <div class="name" id="nm"></div>
+        <div class="detail" id="dt"></div>
+        <div class="big" id="big">0:00</div>
+        <div class="hint" id="hint"></div>
+      </section>
+      <div class="next" id="nx"></div>
+      <div class="controls">
+        <button id="bk">Back</button><button class="primary" id="pr">Done</button><button id="ps">Pause</button>
+      </div>`;
+    document.getElementById("pr").onclick = primary;
+    document.getElementById("ps").onclick = togglePause;
+    document.getElementById("bk").onclick = back;
+    paint();
+  }
+
+  function plannedThrough() {
+    // Planned seconds for everything before the current phase, to compare against the session clock.
+    let p = 0;
+    for (let k = 0; k < st.i; k++) p += steps[k].seconds + steps[k].rest;
+    if (st.phase === "rest") p += steps[st.i].seconds;
+    return p;
+  }
+
+  function paint() {
+    const el = id => document.getElementById(id);
+    if (!el("big")) return;
+    const s = steps[st.i], t = inPhase();
+    const isRest = st.phase === "rest";
+    const target = isRest ? s.rest : s.seconds;
+    const counting = isRest || s.timed;
+    const over = !counting && target > 0 && t > target * 1.5;
+
+    el("pos").textContent = `Step ${st.i + 1} of ${steps.length}`;
+    el("el").textContent = fmt(elapsed());
+    const drift = elapsed() - (plannedThrough() + Math.min(t, target || t));
+    el("pace").textContent = Math.abs(drift) < 15 ? "on pace" : (drift > 0 ? fmt(drift) + " behind" : fmt(-drift) + " ahead");
+    el("pace").className = "sub" + (drift > 60 ? " late" : "");
+    el("prog").style.width = Math.min(100, 100 * (st.i + (isRest ? 0.75 : 0.25)) / steps.length) + "%";
+
+    const ph = el("phase");
+    ph.textContent = st.pauseAt ? "Paused" : (isRest ? "Rest" : (s.timed ? "Go" : "Work"));
+    ph.className = "phase " + (st.pauseAt ? "" : isRest ? "rest" : over ? "over" : "work");
+    el("blk").textContent = s.block || "";
+    el("nm").textContent = isRest ? "Rest" : s.name;
+    el("dt").textContent = isRest ? ("Up next: " + nextName()) : s.detail;
+
+    const big = el("big");
+    if (counting) { big.textContent = fmt(target - t); big.className = "big"; }
+    else { big.textContent = fmt(t); big.className = "big" + (over ? " over" : ""); }
+    el("hint").textContent = st.pauseAt ? "Tap Resume to continue" :
+      (isRest ? "Rest ends on its own. Tap Skip to go now." :
+      (s.timed ? "Advances on its own." : (target ? `Tap Done when the set ends (about ${fmt(target)})` : "Tap Done when the set ends")));
+
+    const pr = el("pr");
+    pr.textContent = st.pauseAt ? "Resume" : (isRest ? "Skip rest" : (s.timed ? "Skip" : "Done"));
+    el("ps").textContent = st.pauseAt ? "Resume" : "Pause";
+    const n = steps[st.i + 1];
+    el("nx").innerHTML = isRest || !n ? (n ? `<span>After that:</span> ${esc(steps[st.i + 2] ? steps[st.i + 2].name : "finish")}` : "<span>Last step</span>")
+      : `<span>Next:</span> ${esc(n.name)} <span>${esc(n.detail)}</span>`;
+  }
+  function nextName() { const n = steps[st.i + 1]; return n ? n.name + (n.detail ? " (" + n.detail + ")" : "") : "finish"; }
+
+  function renderDone() {
+    const total = elapsed();
+    const byStep = steps.map((s, k) => {
+      const w = st.log.filter(l => l.i === k && l.kind === "work").reduce((a, l) => a + l.secs, 0);
+      const r = st.log.filter(l => l.i === k && l.kind === "rest").reduce((a, l) => a + l.secs, 0);
+      return { s, w, r };
+    });
+    const restPlanned = steps.reduce((a, s) => a + s.rest, 0);
+    const restActual = st.log.filter(l => l.kind === "rest").reduce((a, l) => a + l.secs, 0);
+    const summary = `${plan.d} ${plan.t}: ${fmt(total)} total (planned ${fmt(plannedTotal)}), rest ${fmt(restActual)} vs ${fmt(restPlanned)} planned`;
+    app.innerHTML = `
+      <header><div><div class="title">Done</div><div class="sub">${esc(plan.t || "")}</div></div>
+        <div class="clock"><b>${fmt(total)}</b><div class="sub">planned ${fmt(plannedTotal)}</div></div></header>
+      <div class="list">
+        <div class="row"><span>Rest taken</span><span>${fmt(restActual)} <span class="sub">vs ${fmt(restPlanned)}</span></span></div>
+        ${byStep.map(({ s, w, r }) => `<div class="row"><span>${esc(s.name)} <span class="sub">${esc(s.detail)}</span></span><span class="${r > s.rest + 20 ? "late" : ""}">${fmt(w)}${s.rest ? " / " + fmt(r) : ""}</span></div>`).join("")}
+      </div>
+      <button class="primary" id="cp">Copy summary</button>
+      <button id="again">Start over</button>
+      <div class="sub" style="text-align:center">Say it in a "Fitness:" voice note to feed tomorrow's plan.</div>`;
+    document.getElementById("cp").onclick = async e => { try { await navigator.clipboard.writeText(summary); e.target.textContent = "Copied"; } catch (x) { e.target.textContent = summary; } };
+    document.getElementById("again").onclick = () => { st = { i: 0, phase: "ready", log: [] }; save(); render(); };
+  }
+
+  render();
+})();
+</script>
+</body>
+</html>
