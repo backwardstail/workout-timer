@@ -64,6 +64,7 @@ button:disabled{opacity:.4}
 .step.cur{background:var(--track);font-weight:700}
 .step .blk{color:var(--muted);font-weight:400;font-size:12px;display:block}
 .empty{margin:auto;text-align:center;color:var(--muted);padding:40px 10px}
+.sndhint{position:fixed;left:16px;right:16px;bottom:max(16px,env(safe-area-inset-bottom));z-index:20;background:#c27a00;color:#fff;font-size:18px;padding:16px;border-radius:14px}
 .hidden{display:none}
 </style>
 </head>
@@ -127,27 +128,50 @@ button:disabled{opacity:.4}
   let resumable = null;
 
   // ---- Sound, vibration, wake lock (all best effort)
-  let ctx = null;
-  // iOS: audio only starts from a tap, and the context can come up suspended. Every tap calls
-  // this. The "playback" audio session (Safari 17+) lets the beeps play with the mute switch on.
+  let ctx = null, out = null;
+  const AC = window.AudioContext || window.webkitAudioContext;
+  // iOS suspends a page's audio when he switches apps, and on return the context can sit in
+  // "suspended" or "interrupted" where resume() does nothing. The reliable cure is a brand-new
+  // context, and iOS only lets one start from a tap. So every tap checks the engine and, if it is
+  // not running, replaces it on the spot. The "playback" audio session (Safari 17+) lets the
+  // beeps play with the mute switch on.
+  function freshContext() {
+    try { if (ctx && ctx.state !== "closed") ctx.close(); } catch (e) {}
+    ctx = new AC(); out = null;
+  }
   function unlockAudio() {
     try { if (navigator.audioSession) navigator.audioSession.type = "playback"; } catch (e) {}
     try {
-      ctx = ctx || new (window.AudioContext || window.webkitAudioContext)();
+      if (!ctx || ctx.state !== "running") freshContext();
       if (ctx.state !== "running") ctx.resume();
       const b = ctx.createBuffer(1, 1, 22050), src = ctx.createBufferSource();
       src.buffer = b; src.connect(ctx.destination); src.start(0);
     } catch (e) {}
+    setTimeout(updateSoundHint, 250);
   }
   document.addEventListener("pointerdown", unlockAudio, { passive: true });
+  // Back from another app with the engine stalled: say so, since only a tap can fix it.
+  function audioStalled() { return soundOn && st && (st.phase === "work" || st.phase === "rest") && (!ctx || ctx.state !== "running"); }
+  function updateSoundHint() {
+    let h = document.getElementById("sndhint");
+    if (!audioStalled()) { if (h) h.remove(); return; }
+    if (h) return;
+    h = document.createElement("button");
+    h.id = "sndhint"; h.className = "sndhint"; h.textContent = "Tap to turn sound back on";
+    document.body.appendChild(h);
+  }
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState !== "visible") return;
+    try { if (ctx && ctx.state !== "running") ctx.resume(); } catch (e) {}
+    setTimeout(updateSoundHint, 400);
+  });
   // Interval-timer style tones: a rounded sine body plus a soft octave-up overtone, a fast
   // attack with a small downward pitch "punch", and a clean exponential tail. A light
   // compressor keeps them full on a phone speaker without getting harsh.
-  let out = null;
   function bus() {
-    ctx = ctx || new (window.AudioContext || window.webkitAudioContext)();
+    if (!ctx) ctx = new AC();
     if (ctx.state !== "running") ctx.resume();
-    if (!out) {
+    if (!out || out.context !== ctx) {
       const comp = ctx.createDynamicsCompressor();
       comp.threshold.value = -14; comp.knee.value = 8; comp.ratio.value = 4;
       comp.attack.value = 0.002; comp.release.value = 0.12;
