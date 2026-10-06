@@ -335,8 +335,12 @@ button:disabled{opacity:.4}
       <div class="controls">
         <button id="bk">Back</button><button class="primary" id="pr">Next</button><button id="ps">Pause</button>
       </div>
-      <div class="tools"><button id="rs">Reset</button><button id="ex">+15s</button><button id="fw">Full workout</button></div>`;
-    document.getElementById("ex").onclick = () => { if (!st.pauseAt) { st.phaseStart += 15000; st.cued = 0; save(); paint(); } };
+      <div class="tools"><button id="rs">Reset</button><span style="display:flex;gap:8px"><button id="sh">−15s</button><button id="ex">+15s</button></span><button id="fw">Full workout</button></div>`;
+    // Shift the current set or rest by 15 seconds either way. Cutting below zero simply ends it,
+    // and the next tick moves on as usual.
+    const shift = secs => { if (!st.pauseAt) { st.phaseStart += secs * 1000; st.cued = 0; save(); paint(); } };
+    document.getElementById("ex").onclick = () => shift(15);
+    document.getElementById("sh").onclick = () => shift(-15);
     document.getElementById("pr").onclick = primary;
     document.getElementById("fw").onclick = showFull;
     const rs = document.getElementById("rs");
