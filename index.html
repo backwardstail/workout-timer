@@ -27,8 +27,10 @@ header{display:flex;justify-content:space-between;align-items:baseline;gap:12px}
 .bar{height:6px;background:var(--track);border-radius:3px;overflow:hidden}
 .bar i{display:block;height:100%;width:0;background:var(--go);transition:width .3s}
 .stage{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:18px 16px;flex:1;display:flex;flex-direction:column;justify-content:center;text-align:center;gap:6px}
-.phase{font-size:13px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
-.phase.work{color:var(--go)}.phase.rest{color:var(--rest)}.phase.over{color:var(--over)}
+.phase{font-size:clamp(26px,8vw,40px);font-weight:800;letter-spacing:.06em;text-transform:uppercase;
+  line-height:1.1;padding:10px 14px;border-radius:12px;color:#fff;background:var(--muted);margin:-4px 0 6px}
+.phase.work{background:var(--go)}.phase.rest{background:var(--rest)}.phase.trans{background:#c27a00}
+.phase.over{background:var(--over)}
 .block{color:var(--muted);font-size:14px}
 .name{font-size:26px;font-weight:700;line-height:1.2}
 .detail{font-size:22px;font-weight:600;color:var(--ink)}
@@ -381,7 +383,7 @@ button:disabled{opacity:.4}
     const ph = el("phase");
     const label = isRest ? (s.rest <= 20 ? "Transition" : "Rest") : (s.timed ? "Go" : "Work");
     ph.textContent = st.pauseAt ? "Paused" : label;
-    ph.className = "phase " + (st.pauseAt ? "" : isRest ? "rest" : over ? "over" : "work");
+    ph.className = "phase " + (st.pauseAt ? "" : isRest ? (s.rest <= 20 ? "trans" : "rest") : over ? "over" : "work");
     // During a rest the screen is about what comes next: its name and load are the big text.
     const show = isRest ? (steps[st.i + 1] || null) : s;
     el("blk").textContent = isRest ? (show ? "Up next" + (show.block ? " · " + show.block : "") : "") : (s.block || "");
