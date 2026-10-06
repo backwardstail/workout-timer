@@ -31,7 +31,9 @@ header{display:flex;justify-content:space-between;align-items:baseline;gap:12px}
 .phase.work{color:var(--go)}.phase.rest{color:var(--rest)}.phase.over{color:var(--over)}
 .block{color:var(--muted);font-size:14px}
 .name{font-size:26px;font-weight:700;line-height:1.2}
-.detail{font-size:18px;color:var(--muted)}
+.detail{font-size:22px;font-weight:600;color:var(--ink)}
+.chg{display:inline-block;margin-top:8px;padding:6px 12px;border-radius:999px;font-size:15px;font-weight:700;background:var(--over);color:#fff}
+.chg.up{background:var(--go)}
 .big{font-size:min(30vw,128px);font-weight:700;font-variant-numeric:tabular-nums;line-height:1;margin:10px 0 4px}
 .big.over{color:var(--over)}
 .hint{color:var(--muted);font-size:14px;min-height:20px}
@@ -324,6 +326,7 @@ button:disabled{opacity:.4}
         <div class="block" id="blk"></div>
         <div class="name" id="nm"></div>
         <div class="detail" id="dt"></div>
+        <div><span class="chg hidden" id="chg"></span></div>
         <div><a class="pic" id="pic" target="_blank" rel="noopener">Pictures of this move</a></div>
         <div class="big" id="big">0:00</div>
         <div class="hint" id="hint"></div>
@@ -375,9 +378,15 @@ button:disabled{opacity:.4}
     const label = isRest ? (s.rest <= 20 ? "Transition" : "Rest") : (s.timed ? "Go" : "Work");
     ph.textContent = st.pauseAt ? "Paused" : label;
     ph.className = "phase " + (st.pauseAt ? "" : isRest ? "rest" : over ? "over" : "work");
-    el("blk").textContent = s.block || "";
-    el("nm").textContent = isRest ? (s.rest <= 20 ? "Transition" : "Rest") : s.name;
-    el("dt").textContent = isRest ? ("Up next: " + nextName()) : s.detail;
+    // During a rest the screen is about what comes next: its name and load are the big text.
+    const show = isRest ? (steps[st.i + 1] || null) : s;
+    el("blk").textContent = isRest ? (show ? "Up next" + (show.block ? " · " + show.block : "") : "") : (s.block || "");
+    el("nm").textContent = show ? show.name : "Finish";
+    el("dt").textContent = show ? show.detail : "";
+    // Flag a weight change between sets of the same move, so a lighter back-off never surprises him.
+    const chg = el("chg"), prevSame = show && lastSame(isRest ? st.i + 1 : st.i), a = prevSame && loadOf(prevSame.detail), b = show && loadOf(show.detail);
+    if (a && b && a !== b) { chg.textContent = `Weight change: ${a} → ${b} lb`; chg.className = "chg" + (b > a ? " up" : ""); }
+    else chg.className = "chg hidden";
     const pic = el("pic"), picFor = isRest ? steps[st.i + 1] : s;
     if (picFor) { pic.href = picturesUrl(picFor.name); pic.textContent = isRest ? "Pictures of the next move" : "Pictures of this move"; pic.className = "pic"; }
     else pic.className = "pic hidden";
@@ -403,6 +412,17 @@ button:disabled{opacity:.4}
     const n = steps[st.i + 1];
     el("nx").innerHTML = isRest || !n ? (n ? `<span>After that:</span> ${esc(steps[st.i + 2] ? steps[st.i + 2].name : "finish")}` : "<span>Last step</span>")
       : `<span>Next:</span> ${esc(n.name)} <span>${esc(n.detail)}</span>`;
+  }
+  // The first number after "@" in a detail, as the working load ("5 @ 145 lb" -> 145).
+  function loadOf(detail) { const m = /@\s*(?:\d+\s*x\s*)?(\d+(?:\.\d+)?)/i.exec(detail || ""); return m ? +m[1] : null; }
+  // The most recent earlier step of the same move, if any.
+  function lastSame(k) {
+    const name = moveName(steps[k] && steps[k].name).replace(/,?\s*(top set|back-?off.*|ramp.*)$/i, "").toLowerCase();
+    for (let j = k - 1; j >= 0; j--) {
+      const other = moveName(steps[j].name).replace(/,?\s*(top set|back-?off.*|ramp.*)$/i, "").toLowerCase();
+      if (other === name) return /ramp|warm/i.test(steps[j].name) ? null : steps[j];
+    }
+    return null;
   }
   function nextName() { const n = steps[st.i + 1]; return n ? n.name + (n.detail ? " (" + n.detail + ")" : "") : "finish"; }
 
