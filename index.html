@@ -66,6 +66,20 @@ button:disabled{opacity:.4}
 .empty{margin:auto;text-align:center;color:var(--muted);padding:40px 10px}
 .sndhint{position:fixed;left:16px;right:16px;bottom:max(16px,env(safe-area-inset-bottom));z-index:20;background:#c27a00;color:#fff;font-size:18px;padding:16px;border-radius:14px}
 .hidden{display:none}
+/* Set log: pre-filled from the plan, nudged with steppers and one-tap RIR chips. */
+.logc{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 12px;display:flex;flex-direction:column;gap:8px}
+.logc .hd{font-size:14px;color:var(--muted);display:flex;justify-content:space-between;gap:8px}
+.logc .hd b{color:var(--ink)}
+.stps{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.stp{display:flex;align-items:center;gap:4px;background:var(--track);border-radius:12px;padding:4px}
+.stp button{padding:10px 0;width:46px;font-size:22px;line-height:1;background:var(--card);border-radius:10px;flex:none}
+.stp b{flex:1;text-align:center;font-size:20px;font-variant-numeric:tabular-nums;line-height:1.1}
+.stp b small{display:block;font-size:11px;font-weight:500;color:var(--muted)}
+.rir{display:flex;gap:6px;align-items:center;font-size:13px;color:var(--muted)}
+.rir button{flex:1;padding:10px 0;font-size:16px;border-radius:10px}
+.rir button.on{background:var(--go);color:#fff}
+.edited{color:var(--go);font-weight:700}
+.logc.hidden{display:none}
 </style>
 </head>
 <body>
@@ -76,7 +90,8 @@ button:disabled{opacity:.4}
   const app = document.getElementById("app");
 
   // ---- Payload: everything about the session travels in the URL fragment (never sent to a server).
-  // {v, d: date, t: title, m: planned minutes, s: [[block, name, detail, kind(0 reps | 1 timed), seconds, rest], ...]}
+  // {v, d: date, t: title, m: planned minutes, s: [[block, name, detail, kind(0 reps | 1 timed), seconds, rest], ...],
+  //  r: address the set log is mailed to, rs: that email's subject}. r and rs are optional.
   function decode(hash) {
     try {
       let b = hash.replace(/^#/, "").replace(/-/g, "+").replace(/_/g, "/");
@@ -217,7 +232,7 @@ button:disabled{opacity:.4}
   const elapsed = () => st.sessionStart ? ((st.pauseAt || now()) - st.sessionStart - st.paused) / 1000 : 0;
   const inPhase = () => ((st.pauseAt || now()) - st.phaseStart) / 1000;
   const save = () => { st.updated = now(); store.set(st); };
-  const fresh = () => ({ i: 0, phase: "ready", phaseStart: 0, sessionStart: 0, paused: 0, pauseAt: 0, log: [] });
+  const fresh = () => ({ i: 0, phase: "ready", phaseStart: 0, sessionStart: 0, paused: 0, pauseAt: 0, log: [], sets: {} });
 
   st = fresh();
   {
@@ -255,7 +270,7 @@ button:disabled{opacity:.4}
   }
   function resume() {
     unlockAudio(); wake();
-    st = resumable; resumable = null;
+    st = resumable; resumable = null; st.sets = st.sets || {};
     // Freeze the clocks at the last moment it was in use, then unpause: time away is not counted.
     if (!st.pauseAt) st.pauseAt = st.updated || now();
     togglePause();
@@ -357,6 +372,7 @@ button:disabled{opacity:.4}
         <div class="big" id="big">0:00</div>
         <div class="hint" id="hint"></div>
       </section>
+      <div class="logc hidden" id="logc"></div>
       <div class="next" id="nx"></div>
       <div class="controls">
         <button id="bk">Back</button><button class="primary" id="pr">Next</button><button id="ps">Pause</button>
@@ -442,6 +458,62 @@ button:disabled{opacity:.4}
     const n = steps[st.i + 1];
     el("nx").innerHTML = isRest || !n ? (n ? `<span>After that:</span> ${esc(steps[st.i + 2] ? steps[st.i + 2].name : "finish")}` : "<span>Last step</span>")
       : `<span>Next:</span> ${esc(n.name)} <span>${esc(n.detail)}</span>`;
+    // During the rest after a working set, its log card (rebuilt only when the step changes, so
+    // taps on it are never lost to the 200 ms repaint).
+    const lc = el("logc"), want = isRest && loggable(s) ? String(st.i) : "";
+    if (lc.dataset.k !== want) {
+      lc.dataset.k = want;
+      if (want) { lc.innerHTML = logCard(st.i); lc.className = "logc"; } else { lc.innerHTML = ""; lc.className = "logc hidden"; }
+    }
+  }
+
+  // ---- Set log. Every working rep set starts as planned; he nudges what differed. Untouched
+  // sets go out as planned (his rule: no feedback means done as written).
+  const loggable = s => s && !s.timed && !/warm/i.test(s.block || "") && !/\b(ramp|warm)/i.test(s.name || "");
+  function planned(k) {
+    const d = steps[k].detail || "", w = loadOf(d), r = /^\s*(\d+)/.exec(d);
+    return { w: w || 0, bw: w == null, r: r ? +r[1] : 0, rir: null, edited: false };
+  }
+  const setOf = k => st.sets[k] || planned(k);
+  const wStep = w => (w < 30 ? 2.5 : 5);
+  const wText = x => x.bw ? (x.w ? "BW+" + x.w : "BW") : String(x.w);
+  const baseName = n => moveName(n).replace(/,?\s*(top set|back-?off.*|ramp.*)$/i, "");
+  function logCard(k) {
+    const x = setOf(k), s = steps[k];
+    return `<div class="hd"><span>Log <b>${esc(s.name)}</b></span><span class="${x.edited ? "edited" : ""}">${x.edited ? "edited" : "as planned"}</span></div>
+      <div class="stps">
+        <div class="stp"><button data-k="${k}" data-f="w" data-d="-1" aria-label="Less weight">−</button><b>${esc(wText(x))}<small>${x.bw ? "added lb" : "lb"}</small></b><button data-k="${k}" data-f="w" data-d="1" aria-label="More weight">+</button></div>
+        <div class="stp"><button data-k="${k}" data-f="r" data-d="-1" aria-label="Fewer reps">−</button><b>${x.r}<small>reps</small></b><button data-k="${k}" data-f="r" data-d="1" aria-label="More reps">+</button></div>
+      </div>
+      <div class="rir">RIR ${[0, 1, 2, 3, 4].map(v => `<button data-k="${k}" data-rir="${v}" class="${x.rir === v ? "on" : ""}">${v}${v === 4 ? "+" : ""}</button>`).join("")}</div>`;
+  }
+  document.addEventListener("click", e => {
+    const b = e.target.closest && e.target.closest("[data-k][data-f],[data-k][data-rir]");
+    if (!b || !st) return;
+    const k = +b.dataset.k, x = { ...setOf(k) };
+    if (b.dataset.rir != null) { const v = +b.dataset.rir; x.rir = x.rir === v ? null : v; }
+    else if (b.dataset.f === "w") {
+      const d = +b.dataset.d;      // 5 lb on bodyweight moves (a plate or dumbbell), else by load
+      x.w = Math.max(0, x.w + d * (x.bw ? 5 : wStep(x.w + (d < 0 ? -0.01 : 0))));
+    }
+    else x.r = Math.max(0, x.r + (+b.dataset.d));
+    x.edited = true;
+    st.sets[k] = x; save(); sound("blip");
+    const card = b.closest(".logc"); if (card) card.innerHTML = logCard(k);
+  });
+  // One line per move, e.g. "Back squat: 180x5 @2, 185x5, 185x4 @1". RIR shows only where he set it.
+  function logText(total) {
+    const lines = [];
+    let cur = null;
+    steps.forEach((s, k) => {
+      if (!loggable(s)) return;
+      const x = setOf(k), name = baseName(s.name);
+      const set = `${wText(x)}x${x.r}${x.rir != null ? " @" + x.rir : ""}`;
+      if (cur && cur.name === name) cur.sets.push(set); else { cur = { name, sets: [set] }; lines.push(cur); }
+    });
+    const edited = Object.values(st.sets).some(x => x.edited);
+    return [`Timer log ${plan.d} ${plan.t}: ${fmt(total)} (planned ${fmt(plannedTotal)})${edited ? "" : ", all sets as planned"}`,
+      ...lines.map(l => `${l.name}: ${l.sets.join(", ")}`), "End of log"].join("\n");
   }
   // The first number after "@" in a detail, as the working load ("5 @ 145 lb" -> 145).
   function loadOf(detail) { const m = /@\s*(?:\d+\s*x\s*)?(\d+(?:\.\d+)?)/i.exec(detail || ""); return m ? +m[1] : null; }
@@ -465,18 +537,26 @@ button:disabled{opacity:.4}
     });
     const restPlanned = steps.reduce((a, s) => a + s.rest, 0);
     const restActual = st.log.filter(l => l.kind === "rest").reduce((a, l) => a + l.secs, 0);
-    const summary = `${plan.d} ${plan.t}: ${fmt(total)} total (planned ${fmt(plannedTotal)}), rest ${fmt(restActual)} vs ${fmt(restPlanned)} planned`;
+    const logged = steps.map((s, k) => k).filter(k => loggable(steps[k]));
+    const mail = plan.r && logged.length;
     app.innerHTML = `
       <header><div><div class="title">Done</div><div class="sub">${esc(plan.t || "")}</div></div>
         <div class="clock"><b>${fmt(total)}</b><div class="sub">planned ${fmt(plannedTotal)}</div></div></header>
+      ${logged.length ? `<div class="sub">Your sets, pre-filled from the plan. Fix anything that differed, then send.</div>
+        ${logged.map(k => `<div class="logc">${logCard(k)}</div>`).join("")}` : ""}
+      ${mail ? `<button class="primary" id="send">Send to coach</button>` : ""}
+      <button ${mail ? "" : 'class="primary"'} id="cp">Copy log</button>
       <div class="list">
         <div class="row"><span>Rest taken</span><span>${fmt(restActual)} <span class="sub">vs ${fmt(restPlanned)}</span></span></div>
         ${byStep.map(({ s, w, r }) => `<div class="row"><span>${esc(s.name)} <span class="sub">${esc(s.detail)}</span></span><span class="${r > s.rest + 20 ? "late" : ""}">${fmt(w)}${s.rest ? " / " + fmt(r) : ""}</span></div>`).join("")}
       </div>
-      <button class="primary" id="cp">Copy summary</button>
       <button id="again">Start over</button>
-      <div class="sub" style="text-align:center">Say it in a "Fitness:" voice note to feed tomorrow's plan.</div>`;
-    document.getElementById("cp").onclick = async e => { try { await navigator.clipboard.writeText(summary); e.target.textContent = "Copied"; } catch (x) { e.target.textContent = summary; } };
+      <div class="sub" style="text-align:center">${mail ? "Send opens a reply to the day's workout email. Send it from your work account and it goes straight into your log." : 'Paste it in a "Fitness:" voice note or reply to feed tomorrow\'s plan.'}</div>`;
+    if (mail) document.getElementById("send").onclick = () => {
+      location.href = "mailto:" + String(plan.r).replace(/[^\w.@+-]/g, "") + "?subject=" + encodeURIComponent(plan.rs || ("RE: Workout " + plan.d)) +
+        "&body=" + encodeURIComponent(logText(total));
+    };
+    document.getElementById("cp").onclick = async e => { const t = logText(total); try { await navigator.clipboard.writeText(t); e.target.textContent = "Copied"; } catch (x) { e.target.textContent = t; } };
     document.getElementById("again").onclick = () => { st = fresh(); save(); render(); };
   }
 
